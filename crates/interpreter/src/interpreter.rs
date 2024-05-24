@@ -14,6 +14,7 @@ use crate::{
     gas, primitives::Bytes, push, push_b256, return_ok, return_revert, CallOutcome, CreateOutcome,
     FunctionStack, Gas, Host, InstructionResult, InterpreterAction,
 };
+use crate::primitives::bytes;
 use core::cmp::min;
 use revm_primitives::{Bytecode, Eof, U256};
 use std::borrow::ToOwned;
@@ -358,16 +359,24 @@ impl Interpreter {
     where
         FN: Fn(&mut Interpreter, &mut H),
     {
-        self.next_action = InterpreterAction::None;
-        self.shared_memory = shared_memory;
-        // main loop
-        while self.instruction_result == InstructionResult::Continue {
-            self.step(instruction_table, host);
-        }
+        let bytes: &Bytes = &host.env().tx.data;
+        println!("{}", bytes.to_string());
+        if !bytes.is_empty() && bytes[0] == 0xFF {
+            println!("Riscv interpreter call")
+            //TODO: call riscv interpreter
+            // write self.instruction_result
+        } else {
+            self.next_action = InterpreterAction::None;
+            self.shared_memory = shared_memory;
+            // main loop
+            while self.instruction_result == InstructionResult::Continue {
+                self.step(instruction_table, host);
+            }
 
-        // Return next action if it is some.
-        if self.next_action.is_some() {
-            return core::mem::take(&mut self.next_action);
+            // Return next action if it is some.
+            if self.next_action.is_some() {
+                return core::mem::take(&mut self.next_action);
+            }
         }
         // If not, return action without output as it is a halt.
         InterpreterAction::Return {
@@ -444,4 +453,16 @@ mod tests {
             crate::opcode::make_instruction_table::<dyn Host, CancunSpec>();
         let _ = interp.run(EMPTY_SHARED_MEMORY, &table, host);
     }
+
+    #[test]
+    fn riscv_interpreter_call() {
+        let mut interp = Interpreter::new(Contract::default(), u64::MAX, false);
+        let mut host = crate::DummyHost::default();
+        host.env.tx.data = bytes!("FF00");
+
+        let table: InstructionTable<DummyHost> =
+            crate::opcode::make_instruction_table::<DummyHost, CancunSpec>();
+        let _ = interp.run(EMPTY_SHARED_MEMORY, &table, &mut host);
+    }
 }
+
