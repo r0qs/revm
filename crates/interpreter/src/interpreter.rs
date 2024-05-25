@@ -14,10 +14,16 @@ use crate::{
     gas, primitives::Bytes, push, push_b256, return_ok, return_revert, CallOutcome, CreateOutcome,
     FunctionStack, Gas, Host, InstructionResult, InterpreterAction,
 };
-use crate::primitives::bytes;
 use core::cmp::min;
 use revm_primitives::{Bytecode, Eof, U256};
 use std::borrow::ToOwned;
+
+use rvemu::{
+    exception::Exception,
+    emulator::Emulator,
+};
+use eth_riscv_interpreter::setup_from_elf;
+use eth_riscv_syscalls::Syscall;
 
 /// EVM bytecode interpreter.
 #[derive(Debug)]
@@ -359,12 +365,29 @@ impl Interpreter {
     where
         FN: Fn(&mut Interpreter, &mut H),
     {
-        let bytes: &Bytes = &host.env().tx.data;
-        println!("{}", bytes.to_string());
-        if !bytes.is_empty() && bytes[0] == 0xFF {
-            println!("Riscv interpreter call")
-            //TODO: call riscv interpreter
-            // write self.instruction_result
+        if !self.bytecode.is_empty() && self.bytecode[0] == 0xFF {
+            let mut emu: Emulator = setup_from_elf(&self.bytecode[1..]);
+            // Run emulator and capture ecalls
+            while let Err(Exception::EnvironmentCallFromMMode) = emu.start() {
+                let t0: u64 = emu.cpu.xregs.read(5);
+                match Syscall::try_from(t0 as u32).unwrap() {
+                    Syscall::Return => {
+                        let a0: u64 = emu.cpu.xregs.read(10);
+                        let a1: u64 = emu.cpu.xregs.read(11);
+                        let data_bytes = emu.cpu.bus.get_dram_slice(a0..(a0 + a1)).unwrap();
+                        return InterpreterAction::Return {
+                            result: InterpreterResult {
+                                result: InstructionResult::Return,
+                                output: data_bytes.to_vec().into(),
+                                gas: self.gas, // FIXME: gas is not updated
+                            },
+                        }
+                    }
+                    _ => {
+                        self.instruction_result = InstructionResult::Revert;
+                    }
+                }
+            }
         } else {
             self.next_action = InterpreterAction::None;
             self.shared_memory = shared_memory;
@@ -436,6 +459,7 @@ pub fn resize_memory(memory: &mut SharedMemory, gas: &mut Gas, new_size: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use crate::{opcode::InstructionTable, DummyHost};
     use revm_primitives::CancunSpec;
 
@@ -456,13 +480,28 @@ mod tests {
 
     #[test]
     fn riscv_interpreter_call() {
-        let mut interp = Interpreter::new(Contract::default(), u64::MAX, false);
+        let contract_runtime_bytes = fs::read("../../elf_test/runtime").unwrap();
+        let runtime_bytes: Vec<u8> = [0xFF].into_iter().chain(contract_runtime_bytes.into_iter()).collect();
+
+        let contract = Contract::new(
+            Bytes::new(),
+            Bytecode::new_raw(Bytes::from(runtime_bytes)),
+            None,
+            crate::primitives::Address::default(),
+            crate::primitives::Address::default(),
+            U256::ZERO,
+        );
+
+        let mut interp = Interpreter::new(contract, u64::MAX, false);
         let mut host = crate::DummyHost::default();
-        host.env.tx.data = bytes!("FF00");
 
         let table: InstructionTable<DummyHost> =
             crate::opcode::make_instruction_table::<DummyHost, CancunSpec>();
-        let _ = interp.run(EMPTY_SHARED_MEMORY, &table, &mut host);
+        let interpreter_result: InterpreterAction = interp.run(EMPTY_SHARED_MEMORY, &table, &mut host);
+        match interpreter_result {
+            InterpreterAction::Return { result } => { println!("{result:#?}") },
+            _ => println!("nooo")
+        }
     }
 }
 
