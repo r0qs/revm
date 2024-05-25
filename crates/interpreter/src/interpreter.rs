@@ -10,10 +10,11 @@ use revm_primitives::bitvec::view::BitViewSized;
 pub use shared_memory::{num_words, SharedMemory, EMPTY_SHARED_MEMORY};
 pub use stack::{Stack, STACK_LIMIT};
 
-use crate::{EOFCreateOutcome};
+use crate::EOFCreateOutcome;
 use crate::{
     gas, primitives::Bytes, push, push_b256, return_ok, return_revert, CallOutcome, CreateOutcome,
-    FunctionStack, Gas, Host, SStoreResult, SelfDestructResult, InstructionResult, InterpreterAction,
+    FunctionStack, Gas, Host, InstructionResult, InterpreterAction, SStoreResult,
+    SelfDestructResult,
 };
 use core::cmp::min;
 use revm_primitives::{Bytecode, Eof, U256};
@@ -65,6 +66,8 @@ pub struct Interpreter {
     /// Set inside CALL or CREATE instructions and RETURN or REVERT instructions. Additionally those instructions will set
     /// InstructionResult to CallOrCreate/Return/Revert so we know the reason.
     pub next_action: InterpreterAction,
+
+    pub riscv_emulator: Option<Emulator>,
 }
 
 impl Default for Interpreter {
@@ -93,6 +96,13 @@ impl Interpreter {
         }
         let is_eof = contract.bytecode.is_eof();
         let bytecode = contract.bytecode.bytecode().clone();
+
+        let riscv_emulator = if bytecode[0] == 0xFF {
+            Some(setup_from_elf(&bytecode[1..], &contract.input))
+        } else {
+            None
+        };
+
         Self {
             instruction_pointer: bytecode.as_ptr(),
             bytecode,
@@ -107,6 +117,7 @@ impl Interpreter {
             shared_memory: EMPTY_SHARED_MEMORY,
             stack: Stack::new(),
             next_action: InterpreterAction::None,
+            riscv_emulator,
         }
     }
 
@@ -363,8 +374,10 @@ impl Interpreter {
     where
         FN: Fn(&mut Interpreter, &mut H),
     {
-        if !self.bytecode.is_empty() && self.bytecode[0] == 0xFF {
-            let mut emu: Emulator = setup_from_elf(&self.bytecode[1..], &host.env().tx.data.to_vec());
+        self.next_action = InterpreterAction::None;
+        self.shared_memory = shared_memory;
+
+        if let Some(emu) = &mut self.riscv_emulator {
             // Run emulator and capture ecalls
             while let Err(Exception::EnvironmentCallFromMMode) = emu.start() {
                 let t0: u64 = emu.cpu.xregs.read(5);
@@ -398,7 +411,11 @@ impl Interpreter {
                     Syscall::SStore => {
                         let a0: u64 = emu.cpu.xregs.read(10);
                         let a1: u64 = emu.cpu.xregs.read(11);
-                        let store_result = host.sstore(self.contract.target_address, U256::from(a0), U256::from(a1));
+                        let store_result = host.sstore(
+                            self.contract.target_address,
+                            U256::from(a0),
+                            U256::from(a1),
+                        );
                         match store_result {
                             Some(sstore_result) => {
                                 println!("SSTORE: {:?}", sstore_result);
@@ -421,7 +438,7 @@ impl Interpreter {
                                 output: Bytes::from(0u32.to_le_bytes()), //TODO: return revert(0,0)
                                 gas: self.gas, // FIXME: gas is not correct
                             },
-                        }
+                        };
                     }
                     _ => {
                         println!("Unhandled syscall: {:?}", t0);
@@ -431,18 +448,17 @@ impl Interpreter {
             }
             self.instruction_result = InstructionResult::Stop;
         } else {
-            self.next_action = InterpreterAction::None;
-            self.shared_memory = shared_memory;
             // main loop
             while self.instruction_result == InstructionResult::Continue {
                 self.step(instruction_table, host);
             }
-
-            // Return next action if it is some.
-            if self.next_action.is_some() {
-                return core::mem::take(&mut self.next_action);
-            }
         }
+
+        // Return next action if it is some.
+        if self.next_action.is_some() {
+            return core::mem::take(&mut self.next_action);
+        }
+
         // If not, return action without output as it is a halt.
         println!("Halt: {:?}", self.instruction_result);
         InterpreterAction::Return {
@@ -547,7 +563,10 @@ mod tests {
             InterpreterAction::Return { result } => {
                 assert!(result.output.len() > 0);
                 assert_eq!(result.result, InstructionResult::Return);
-                assert_eq!(result.output, Bytes::from(vec![0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
+                assert_eq!(
+                    result.output,
+                    Bytes::from(vec![0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                );
                 println!("{result:#?}")
             }
             _ => panic!("Expected return action"),
