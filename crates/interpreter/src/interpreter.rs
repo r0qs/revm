@@ -455,7 +455,7 @@ impl Interpreter {
                     }
                 }
             }
-            self.instruction_result = InstructionResult::Revert;
+            self.instruction_result = InstructionResult::Return;
         } else {
             // main loop
             while self.instruction_result == InstructionResult::Continue {
