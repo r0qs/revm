@@ -386,14 +386,14 @@ impl Interpreter {
                         let a0: u64 = emu.cpu.xregs.read(10);
                         let a1: u64 = emu.cpu.xregs.read(11);
                         let data_bytes = emu.cpu.bus.get_dram_slice(a0..(a0 + a1)).unwrap();
-                        //self.instruction_result = InstructionResult::Return;
-                        return InterpreterAction::Return {
+                        self.next_action = InterpreterAction::Return {
                             result: InterpreterResult {
                                 result: InstructionResult::Return,
                                 output: data_bytes.to_vec().into(),
                                 gas: self.gas, // FIXME: gas is not correct
                             },
                         };
+                        break;
                     }
                     Syscall::SLoad => {
                         let a0: u64 = emu.cpu.xregs.read(10);
@@ -427,18 +427,19 @@ impl Interpreter {
                         }
                     }
                     Syscall::Call => {
-                        // TODO: make_call_frame
                         println!("Call");
+                        //let a0: u64 = emu.cpu.xregs.read(10);
                     }
                     Syscall::Revert => {
                         println!("Revert");
-                        return InterpreterAction::Return {
+                        self.next_action = InterpreterAction::Return {
                             result: InterpreterResult {
                                 result: InstructionResult::Revert,
                                 output: Bytes::from(0u32.to_le_bytes()), //TODO: return revert(0,0)
                                 gas: self.gas, // FIXME: gas is not correct
                             },
                         };
+                        break;
                     }
                     _ => {
                         println!("Unhandled syscall: {:?}", t0);
@@ -446,7 +447,7 @@ impl Interpreter {
                     }
                 }
             }
-            self.instruction_result = InstructionResult::Stop;
+            self.instruction_result = InstructionResult::Revert;
         } else {
             // main loop
             while self.instruction_result == InstructionResult::Continue {
