@@ -1216,7 +1216,7 @@ dependencies = [
 [[package]]
 name = "eth-riscv-interpreter"
 version = "0.1.0"
-source = "git+https://github.com/leonardoalt/r55#74ac6b1b8cb1821fd7e86d878b2810b389a77a71"
+source = "git+https://github.com/leonardoalt/r55#f745d6635d82cc70f5448ac42cc30ac017f9071a"
 dependencies = [
  "goblin",
  "rvemu",
@@ -1225,7 +1225,7 @@ dependencies = [
 [[package]]
 name = "eth-riscv-syscalls"
 version = "0.1.0"
-source = "git+https://github.com/leonardoalt/r55#74ac6b1b8cb1821fd7e86d878b2810b389a77a71"
+source = "git+https://github.com/leonardoalt/r55#f745d6635d82cc70f5448ac42cc30ac017f9071a"
 
 [[package]]
 name = "ethabi"

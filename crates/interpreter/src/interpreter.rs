@@ -6,16 +6,14 @@ mod shared_memory;
 mod stack;
 
 pub use contract::Contract;
+use revm_primitives::bitvec::view::BitViewSized;
 pub use shared_memory::{num_words, SharedMemory, EMPTY_SHARED_MEMORY};
 pub use stack::{Stack, STACK_LIMIT};
 
-use crate::instructions::host::{
-    sload, sstore
-};
-use crate::EOFCreateOutcome;
+use crate::{EOFCreateOutcome};
 use crate::{
     gas, primitives::Bytes, push, push_b256, return_ok, return_revert, CallOutcome, CreateOutcome,
-    FunctionStack, Gas, Host, InstructionResult, InterpreterAction,
+    FunctionStack, Gas, Host, SStoreResult, SelfDestructResult, InstructionResult, InterpreterAction,
 };
 use core::cmp::min;
 use revm_primitives::{Bytecode, Eof, U256};
@@ -366,7 +364,7 @@ impl Interpreter {
         FN: Fn(&mut Interpreter, &mut H),
     {
         if !self.bytecode.is_empty() && self.bytecode[0] == 0xFF {
-            let mut emu: Emulator = setup_from_elf(&self.bytecode[1..]);
+            let mut emu: Emulator = setup_from_elf(&self.bytecode[1..], &host.env().tx.data.to_vec());
             // Run emulator and capture ecalls
             while let Err(Exception::EnvironmentCallFromMMode) = emu.start() {
                 let t0: u64 = emu.cpu.xregs.read(5);
@@ -386,22 +384,47 @@ impl Interpreter {
                     }
                     Syscall::SLoad => {
                         let a0: u64 = emu.cpu.xregs.read(10);
-                        push!(self, U256::from(a0));
-                        sload(self, host);
-                        //let a0 = host.sload(self.contract.target_address, U256::from(a0));
-                        //emu.cpu.xregs.write(10, a0);
+                        match host.sload(self.contract.target_address, U256::from(a0)) {
+                            Some((value, is_cold)) => {
+                                println!("SLOAD: {:?} {:?}", value, is_cold);
+                                emu.cpu.xregs.write(10, value.as_limbs()[0]);
+                            }
+                            _ => {
+                                println!("SLOAD: None");
+                                self.instruction_result = InstructionResult::Revert;
+                            }
+                        }
                     }
                     Syscall::SStore => {
                         let a0: u64 = emu.cpu.xregs.read(10);
                         let a1: u64 = emu.cpu.xregs.read(11);
-                        push!(self, U256::from(a0));
-                        push!(self, U256::from(a1));
-                        sstore(self, host);
+                        let store_result = host.sstore(self.contract.target_address, U256::from(a0), U256::from(a1));
+                        match store_result {
+                            Some(sstore_result) => {
+                                println!("SSTORE: {:?}", sstore_result);
+                            }
+                            _ => {
+                                println!("SSTORE: None");
+                                self.instruction_result = InstructionResult::Revert;
+                            }
+                        }
                     }
                     Syscall::Call => {
                         // TODO: make_call_frame
+                        println!("Call");
+                    }
+                    Syscall::Revert => {
+                        println!("Revert");
+                        return InterpreterAction::Return {
+                            result: InterpreterResult {
+                                result: InstructionResult::Revert,
+                                output: Bytes::from(0u32.to_le_bytes()), //TODO: return revert(0,0)
+                                gas: self.gas, // FIXME: gas is not correct
+                            },
+                        };
                     }
                     _ => {
+                        println!("Unhandled syscall: {:?}", t0);
                         self.instruction_result = InstructionResult::Revert;
                     }
                 }
@@ -420,6 +443,7 @@ impl Interpreter {
             }
         }
         // If not, return action without output as it is a halt.
+        println!("Halt: {:?}", self.instruction_result);
         InterpreterAction::Return {
             result: InterpreterResult {
                 result: self.instruction_result,
@@ -497,9 +521,9 @@ mod tests {
     }
 
     #[test]
-    fn riscv_interpreter_call() {
+    fn riscv_interpreter_return() {
         let mut runtime_bytes = vec![0xFF];
-        File::open("../../elf_test/runtime")
+        File::open("../../elf_test/return_example")
             .unwrap()
             .read_to_end(&mut runtime_bytes)
             .unwrap();
@@ -515,16 +539,43 @@ mod tests {
 
         let mut interp = Interpreter::new(contract, u64::MAX, false);
         let mut host = crate::DummyHost::default();
-
         let table: InstructionTable<DummyHost> =
             crate::opcode::make_instruction_table::<DummyHost, CancunSpec>();
-        let interpreter_result: InterpreterAction =
-            interp.run(EMPTY_SHARED_MEMORY, &table, &mut host);
-        match interpreter_result {
+
+        match interp.run(EMPTY_SHARED_MEMORY, &table, &mut host) {
             InterpreterAction::Return { result } => {
+                assert!(result.output.len() > 0);
+                assert_eq!(result.result, InstructionResult::Return);
+                assert_eq!(result.output, Bytes::from(vec![0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
                 println!("{result:#?}")
             }
-            _ => println!("nooo"),
+            _ => panic!("Expected return action"),
         }
+    }
+
+    #[test]
+    fn riscv_interpreter_sstore_and_sload() {
+        let mut runtime_bytes = vec![0xFF];
+        File::open("../../elf_test/sstore_and_sload_example")
+            .unwrap()
+            .read_to_end(&mut runtime_bytes)
+            .unwrap();
+
+        let contract = Contract::new(
+            Bytes::new(),
+            Bytecode::new_raw(Bytes::from(runtime_bytes)),
+            None,
+            crate::primitives::Address::default(),
+            crate::primitives::Address::default(),
+            U256::ZERO,
+        );
+
+        let mut interp = Interpreter::new(contract, u64::MAX, false);
+        let mut host = crate::DummyHost::default();
+        let table: InstructionTable<DummyHost> =
+            crate::opcode::make_instruction_table::<DummyHost, CancunSpec>();
+
+        let result = interp.run(EMPTY_SHARED_MEMORY, &table, &mut host);
+        println!("{result:#?}");
     }
 }
