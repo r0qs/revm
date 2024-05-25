@@ -421,7 +421,7 @@ impl Interpreter {
                                 output: Bytes::from(0u32.to_le_bytes()), //TODO: return revert(0,0)
                                 gas: self.gas, // FIXME: gas is not correct
                             },
-                        };
+                        }
                     }
                     _ => {
                         println!("Unhandled syscall: {:?}", t0);
@@ -429,6 +429,7 @@ impl Interpreter {
                     }
                 }
             }
+            self.instruction_result = InstructionResult::Stop;
         } else {
             self.next_action = InterpreterAction::None;
             self.shared_memory = shared_memory;
