@@ -385,7 +385,11 @@ impl Interpreter {
                     Syscall::Return => {
                         let a0: u64 = emu.cpu.xregs.read(10);
                         let a1: u64 = emu.cpu.xregs.read(11);
-                        let data_bytes = emu.cpu.bus.get_dram_slice(a0..(a0 + a1)).unwrap();
+                        let data_bytes = if a1 != 0 {
+                            emu.cpu.bus.get_dram_slice(a0..(a0 + a1)).unwrap()
+                        } else {
+                            &mut []
+                        };
                         self.next_action = InterpreterAction::Return {
                             result: InterpreterResult {
                                 result: InstructionResult::Return,
@@ -428,7 +432,11 @@ impl Interpreter {
                     }
                     Syscall::Call => {
                         println!("Call");
-                        //let a0: u64 = emu.cpu.xregs.read(10);
+                        let a0: u64 = emu.cpu.xregs.read(10);
+                        let a1: u64 = emu.cpu.xregs.read(11);
+                        let a2: u64 = emu.cpu.xregs.read(12);
+                        let a3: u64 = emu.cpu.xregs.read(13);
+                        // call
                     }
                     Syscall::Revert => {
                         println!("Revert");
