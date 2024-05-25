@@ -9,6 +9,9 @@ pub use contract::Contract;
 pub use shared_memory::{num_words, SharedMemory, EMPTY_SHARED_MEMORY};
 pub use stack::{Stack, STACK_LIMIT};
 
+use crate::instructions::host::{
+    sload, sstore
+};
 use crate::EOFCreateOutcome;
 use crate::{
     gas, primitives::Bytes, push, push_b256, return_ok, return_revert, CallOutcome, CreateOutcome,
@@ -372,13 +375,31 @@ impl Interpreter {
                         let a0: u64 = emu.cpu.xregs.read(10);
                         let a1: u64 = emu.cpu.xregs.read(11);
                         let data_bytes = emu.cpu.bus.get_dram_slice(a0..(a0 + a1)).unwrap();
+                        //self.instruction_result = InstructionResult::Return;
                         return InterpreterAction::Return {
                             result: InterpreterResult {
                                 result: InstructionResult::Return,
                                 output: data_bytes.to_vec().into(),
-                                gas: self.gas, // FIXME: gas is not updated
+                                gas: self.gas, // FIXME: gas is not correct
                             },
                         };
+                    }
+                    Syscall::SLoad => {
+                        let a0: u64 = emu.cpu.xregs.read(10);
+                        push!(self, U256::from(a0));
+                        sload(self, host);
+                        //let a0 = host.sload(self.contract.target_address, U256::from(a0));
+                        //emu.cpu.xregs.write(10, a0);
+                    }
+                    Syscall::SStore => {
+                        let a0: u64 = emu.cpu.xregs.read(10);
+                        let a1: u64 = emu.cpu.xregs.read(11);
+                        push!(self, U256::from(a0));
+                        push!(self, U256::from(a1));
+                        sstore(self, host);
+                    }
+                    Syscall::Call => {
+                        // TODO: make_call_frame
                     }
                     _ => {
                         self.instruction_result = InstructionResult::Revert;
@@ -404,7 +425,7 @@ impl Interpreter {
                 result: self.instruction_result,
                 // return empty bytecode
                 output: Bytes::new(),
-                gas: self.gas,
+                gas: self.gas, // FIXME: gas is not correct
             },
         }
     }
