@@ -379,83 +379,92 @@ impl Interpreter {
 
         if let Some(emu) = &mut self.riscv_emulator {
             // Run emulator and capture ecalls
-            while let Err(Exception::EnvironmentCallFromMMode) = emu.start() {
-                let t0: u64 = emu.cpu.xregs.read(5);
-                match Syscall::try_from(t0 as u32).unwrap() {
-                    Syscall::Return => {
-                        let a0: u64 = emu.cpu.xregs.read(10);
-                        let a1: u64 = emu.cpu.xregs.read(11);
-                        let data_bytes = if a1 != 0 {
-                            emu.cpu.bus.get_dram_slice(a0..(a0 + a1)).unwrap()
-                        } else {
-                            &mut []
-                        };
-                        self.next_action = InterpreterAction::Return {
-                            result: InterpreterResult {
-                                result: InstructionResult::Return,
-                                output: data_bytes.to_vec().into(),
-                                gas: self.gas, // FIXME: gas is not correct
-                            },
-                        };
-                        break;
-                    }
-                    Syscall::SLoad => {
-                        let a0: u64 = emu.cpu.xregs.read(10);
-                        match host.sload(self.contract.target_address, U256::from(a0)) {
-                            Some((value, is_cold)) => {
-                                println!("SLOAD: {:?} {:?}", value, is_cold);
-                                emu.cpu.xregs.write(10, value.as_limbs()[0]);
+            loop {
+                let run_result = emu.start();
+                println!("Run result: {:?}", run_result);
+                match run_result {
+                    Err(Exception::EnvironmentCallFromMMode) => {
+                        let t0: u64 = emu.cpu.xregs.read(5);
+                        match Syscall::try_from(t0 as u32).unwrap() {
+                            Syscall::Return => {
+                                let a0: u64 = emu.cpu.xregs.read(10);
+                                let a1: u64 = emu.cpu.xregs.read(11);
+                                let data_bytes = if a1 != 0 {
+                                    emu.cpu.bus.get_dram_slice(a0..(a0 + a1)).unwrap()
+                                } else {
+                                    &mut []
+                                };
+                                self.next_action = InterpreterAction::Return {
+                                    result: InterpreterResult {
+                                        result: InstructionResult::Return,
+                                        output: data_bytes.to_vec().into(),
+                                        gas: self.gas, // FIXME: gas is not correct
+                                    },
+                                };
+                                break;
+                            }
+                            Syscall::SLoad => {
+                                let a0: u64 = emu.cpu.xregs.read(10);
+                                match host.sload(self.contract.target_address, U256::from(a0)) {
+                                    Some((value, is_cold)) => {
+                                        println!("SLOAD: {:?} {:?}", value, is_cold);
+                                        emu.cpu.xregs.write(10, value.as_limbs()[0]);
+                                    }
+                                    _ => {
+                                        println!("SLOAD: None");
+                                        self.instruction_result = InstructionResult::Revert;
+                                    }
+                                }
+                            }
+                            Syscall::SStore => {
+                                let a0: u64 = emu.cpu.xregs.read(10);
+                                let a1: u64 = emu.cpu.xregs.read(11);
+                                let store_result = host.sstore(
+                                    self.contract.target_address,
+                                    U256::from(a0),
+                                    U256::from(a1),
+                                );
+                                match store_result {
+                                    Some(sstore_result) => {
+                                        println!("SSTORE: {:?}", sstore_result);
+                                    }
+                                    _ => {
+                                        println!("SSTORE: None");
+                                        self.instruction_result = InstructionResult::Revert;
+                                    }
+                                }
+                            }
+                            Syscall::Call => {
+                                println!("Call");
+                                let a0: u64 = emu.cpu.xregs.read(10);
+                                let a1: u64 = emu.cpu.xregs.read(11);
+                                let a2: u64 = emu.cpu.xregs.read(12);
+                                let a3: u64 = emu.cpu.xregs.read(13);
+                                // call
+                            }
+                            Syscall::Revert => {
+                                println!("Revert");
+                                self.next_action = InterpreterAction::Return {
+                                    result: InterpreterResult {
+                                        result: InstructionResult::Revert,
+                                        output: Bytes::from(0u32.to_le_bytes()), //TODO: return revert(0,0)
+                                        gas: self.gas, // FIXME: gas is not correct
+                                    },
+                                };
+                                break;
                             }
                             _ => {
-                                println!("SLOAD: None");
+                                println!("Unhandled syscall: {:?}", t0);
                                 self.instruction_result = InstructionResult::Revert;
                             }
                         }
-                    }
-                    Syscall::SStore => {
-                        let a0: u64 = emu.cpu.xregs.read(10);
-                        let a1: u64 = emu.cpu.xregs.read(11);
-                        let store_result = host.sstore(
-                            self.contract.target_address,
-                            U256::from(a0),
-                            U256::from(a1),
-                        );
-                        match store_result {
-                            Some(sstore_result) => {
-                                println!("SSTORE: {:?}", sstore_result);
-                            }
-                            _ => {
-                                println!("SSTORE: None");
-                                self.instruction_result = InstructionResult::Revert;
-                            }
-                        }
-                    }
-                    Syscall::Call => {
-                        println!("Call");
-                        let a0: u64 = emu.cpu.xregs.read(10);
-                        let a1: u64 = emu.cpu.xregs.read(11);
-                        let a2: u64 = emu.cpu.xregs.read(12);
-                        let a3: u64 = emu.cpu.xregs.read(13);
-                        // call
-                    }
-                    Syscall::Revert => {
-                        println!("Revert");
-                        self.next_action = InterpreterAction::Return {
-                            result: InterpreterResult {
-                                result: InstructionResult::Revert,
-                                output: Bytes::from(0u32.to_le_bytes()), //TODO: return revert(0,0)
-                                gas: self.gas, // FIXME: gas is not correct
-                            },
-                        };
-                        break;
                     }
                     _ => {
-                        println!("Unhandled syscall: {:?}", t0);
                         self.instruction_result = InstructionResult::Revert;
+                        break;
                     }
                 }
             }
-            self.instruction_result = InstructionResult::Revert;
         } else {
             // main loop
             while self.instruction_result == InstructionResult::Continue {
