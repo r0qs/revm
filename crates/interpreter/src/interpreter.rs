@@ -18,12 +18,9 @@ use core::cmp::min;
 use revm_primitives::{Bytecode, Eof, U256};
 use std::borrow::ToOwned;
 
-use rvemu::{
-    exception::Exception,
-    emulator::Emulator,
-};
 use eth_riscv_interpreter::setup_from_elf;
 use eth_riscv_syscalls::Syscall;
+use rvemu::{emulator::Emulator, exception::Exception};
 
 /// EVM bytecode interpreter.
 #[derive(Debug)]
@@ -381,7 +378,7 @@ impl Interpreter {
                                 output: data_bytes.to_vec().into(),
                                 gas: self.gas, // FIXME: gas is not updated
                             },
-                        }
+                        };
                     }
                     _ => {
                         self.instruction_result = InstructionResult::Revert;
@@ -459,9 +456,9 @@ pub fn resize_memory(memory: &mut SharedMemory, gas: &mut Gas, new_size: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use crate::{opcode::InstructionTable, DummyHost};
     use revm_primitives::CancunSpec;
+    use std::{fs::File, io::Read};
 
     #[test]
     fn object_safety() {
@@ -480,8 +477,11 @@ mod tests {
 
     #[test]
     fn riscv_interpreter_call() {
-        let contract_runtime_bytes = fs::read("../../elf_test/runtime").unwrap();
-        let runtime_bytes: Vec<u8> = [0xFF].into_iter().chain(contract_runtime_bytes.into_iter()).collect();
+        let mut runtime_bytes = vec![0xFF];
+        File::open("../../elf_test/runtime")
+            .unwrap()
+            .read_to_end(&mut runtime_bytes)
+            .unwrap();
 
         let contract = Contract::new(
             Bytes::new(),
@@ -497,11 +497,13 @@ mod tests {
 
         let table: InstructionTable<DummyHost> =
             crate::opcode::make_instruction_table::<DummyHost, CancunSpec>();
-        let interpreter_result: InterpreterAction = interp.run(EMPTY_SHARED_MEMORY, &table, &mut host);
+        let interpreter_result: InterpreterAction =
+            interp.run(EMPTY_SHARED_MEMORY, &table, &mut host);
         match interpreter_result {
-            InterpreterAction::Return { result } => { println!("{result:#?}") },
-            _ => println!("nooo")
+            InterpreterAction::Return { result } => {
+                println!("{result:#?}")
+            }
+            _ => println!("nooo"),
         }
     }
 }
-
