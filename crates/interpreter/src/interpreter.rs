@@ -385,10 +385,10 @@ impl Interpreter {
                         let t0: u64 = emu.cpu.xregs.read(5);
                         match t0 {
                             0 => { // Syscall::Return
-                                let a0: u64 = emu.cpu.xregs.read(10);
-                                let a1: u64 = emu.cpu.xregs.read(11);
-                                let data_bytes = if a1 != 0 {
-                                    emu.cpu.bus.get_dram_slice(a0..(a0 + a1)).unwrap()
+                                let ret_offset: u64 = emu.cpu.xregs.read(10);
+                                let ret_size: u64 = emu.cpu.xregs.read(11);
+                                let data_bytes = if ret_size != 0 {
+                                    emu.cpu.bus.get_dram_slice(ret_offset..(ret_offset + ret_size)).unwrap()
                                 } else {
                                     &mut []
                                 };
@@ -402,8 +402,8 @@ impl Interpreter {
                                 break;
                             }
                             1 => { // Syscall:SLoad
-                                let a0: u64 = emu.cpu.xregs.read(10);
-                                match host.sload(self.contract.target_address, U256::from(a0)) {
+                                let key: u64 = emu.cpu.xregs.read(10);
+                                match host.sload(self.contract.target_address, U256::from(key)) {
                                     Some((value, is_cold)) => {
                                         println!("SLOAD: {:?} {:?}", value, is_cold);
                                         emu.cpu.xregs.write(10, value.as_limbs()[0]);
@@ -415,12 +415,12 @@ impl Interpreter {
                                 }
                             }
                             2 => { // Syscall::SStore
-                                let a0: u64 = emu.cpu.xregs.read(10);
-                                let a1: u64 = emu.cpu.xregs.read(11);
+                                let key: u64 = emu.cpu.xregs.read(10);
+                                let value: u64 = emu.cpu.xregs.read(11);
                                 let store_result = host.sstore(
                                     self.contract.target_address,
-                                    U256::from(a0),
-                                    U256::from(a1),
+                                    U256::from(key),
+                                    U256::from(value),
                                 );
                                 match store_result {
                                     Some(sstore_result) => {
