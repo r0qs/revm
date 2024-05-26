@@ -6,22 +6,20 @@ mod shared_memory;
 mod stack;
 
 pub use contract::Contract;
-use revm_primitives::bitvec::view::BitViewSized;
 pub use shared_memory::{num_words, SharedMemory, EMPTY_SHARED_MEMORY};
 pub use stack::{Stack, STACK_LIMIT};
 
+use crate::{CallInputs, CallScheme, CallValue};
 use crate::EOFCreateOutcome;
 use crate::{
-    gas, primitives::Bytes, push, push_b256, return_ok, return_revert, CallOutcome, CreateOutcome,
-    FunctionStack, Gas, Host, InstructionResult, InterpreterAction, SStoreResult,
-    SelfDestructResult,
+    gas, push, push_b256, return_ok, return_revert, CallOutcome, CreateOutcome,
+    FunctionStack, Gas, Host, InstructionResult, InterpreterAction,
 };
 use core::cmp::min;
-use revm_primitives::{Bytecode, Eof, U256};
+use revm_primitives::{Bytes, Address, Bytecode, Eof, U256};
 use std::borrow::ToOwned;
 
 use eth_riscv_interpreter::setup_from_elf;
-use eth_riscv_syscalls::Syscall;
 use rvemu::{emulator::Emulator, exception::Exception};
 
 /// EVM bytecode interpreter.
@@ -385,8 +383,8 @@ impl Interpreter {
                 match run_result {
                     Err(Exception::EnvironmentCallFromMMode) => {
                         let t0: u64 = emu.cpu.xregs.read(5);
-                        match Syscall::try_from(t0 as u32).unwrap() {
-                            Syscall::Return => {
+                        match t0 {
+                            0 => { // Syscall::Return
                                 let a0: u64 = emu.cpu.xregs.read(10);
                                 let a1: u64 = emu.cpu.xregs.read(11);
                                 let data_bytes = if a1 != 0 {
@@ -403,7 +401,7 @@ impl Interpreter {
                                 };
                                 break;
                             }
-                            Syscall::SLoad => {
+                            1 => { // Syscall:SLoad
                                 let a0: u64 = emu.cpu.xregs.read(10);
                                 match host.sload(self.contract.target_address, U256::from(a0)) {
                                     Some((value, is_cold)) => {
@@ -416,7 +414,7 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            Syscall::SStore => {
+                            2 => { // Syscall::SStore
                                 let a0: u64 = emu.cpu.xregs.read(10);
                                 let a1: u64 = emu.cpu.xregs.read(11);
                                 let store_result = host.sstore(
@@ -434,15 +432,34 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            Syscall::Call => {
+                            3 => { // Syscall::Call
                                 println!("Call");
                                 let a0: u64 = emu.cpu.xregs.read(10);
-                                let a1: u64 = emu.cpu.xregs.read(11);
-                                let a2: u64 = emu.cpu.xregs.read(12);
-                                let a3: u64 = emu.cpu.xregs.read(13);
-                                // call
+                                let address = Address::from_slice(emu.cpu.bus.get_dram_slice(a0..(a0 + 20)).unwrap());
+                                let value: u64 = emu.cpu.xregs.read(11);
+                                let args_offset: u64 = emu.cpu.xregs.read(12);
+                                let args_size: u64 = emu.cpu.xregs.read(13);
+                                let ret_offset = emu.cpu.xregs.read(14) as usize;
+                                let ret_size = emu.cpu.xregs.read(15) as usize;
+
+                                let tx = &host.env().tx;
+                                self.next_action = InterpreterAction::Call {
+                                    inputs: Box::new(CallInputs {
+                                        input: emu.cpu.bus.get_dram_slice(args_offset..(args_offset + args_size)).unwrap().to_vec().into(),
+                                        gas_limit: tx.gas_limit,
+                                        target_address: address,
+                                        bytecode_address: address,
+                                        caller: self.contract.target_address,
+                                        value: CallValue::Transfer(U256::from_le_bytes(value.to_le_bytes())),
+                                        scheme: CallScheme::Call,
+                                        is_static: false,
+                                        is_eof: false,
+                                        return_memory_offset: ret_offset..(ret_offset + ret_size),
+                                    })
+                                };
+
                             }
-                            Syscall::Revert => {
+                            4 => { // Syscall::Revert
                                 println!("Revert");
                                 self.next_action = InterpreterAction::Return {
                                     result: InterpreterResult {
