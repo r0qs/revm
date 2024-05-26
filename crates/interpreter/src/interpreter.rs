@@ -401,7 +401,6 @@ impl Interpreter {
             // Run emulator and capture ecalls
             loop {
                 let run_result = emu.start();
-                println!("Run result: {:?}", run_result);
                 match run_result {
                     Err(Exception::EnvironmentCallFromMMode) => {
                         let t0: u64 = emu.cpu.xregs.read(5);
@@ -432,12 +431,11 @@ impl Interpreter {
                                 let key: u64 = emu.cpu.xregs.read(10);
                                 match host.sload(self.contract.target_address, U256::from(key)) {
                                     Some((value, is_cold)) => {
-                                        println!("SLOAD: {:?} {:?}", value, is_cold);
                                         emu.cpu.xregs.write(10, value.as_limbs()[0]);
                                     }
                                     _ => {
-                                        println!("SLOAD: None");
                                         self.instruction_result = InstructionResult::Revert;
+                                        break;
                                     }
                                 }
                             }
@@ -445,24 +443,14 @@ impl Interpreter {
                                 // Syscall::SStore
                                 let key: u64 = emu.cpu.xregs.read(10);
                                 let value: u64 = emu.cpu.xregs.read(11);
-                                let store_result = host.sstore(
+                                host.sstore(
                                     self.contract.target_address,
                                     U256::from(key),
                                     U256::from(value),
                                 );
-                                match store_result {
-                                    Some(sstore_result) => {
-                                        println!("SSTORE: {:?}", sstore_result);
-                                    }
-                                    _ => {
-                                        println!("SSTORE: None");
-                                        self.instruction_result = InstructionResult::Revert;
-                                    }
-                                }
                             }
                             3 => {
                                 // Syscall::Call
-                                println!("Call");
                                 let a0: u64 = emu.cpu.xregs.read(10);
                                 let address = Address::from_slice(
                                     emu.cpu.bus.get_dram_slice(a0..(a0 + 20)).unwrap(),
@@ -505,7 +493,6 @@ impl Interpreter {
                             }
                             4 => {
                                 // Syscall::Revert
-                                println!("Revert");
                                 self.next_action = InterpreterAction::Return {
                                     result: InterpreterResult {
                                         result: InstructionResult::Revert,
@@ -518,6 +505,7 @@ impl Interpreter {
                             _ => {
                                 println!("Unhandled syscall: {:?}", t0);
                                 self.instruction_result = InstructionResult::Revert;
+                                break;
                             }
                         }
                     }
@@ -544,7 +532,6 @@ impl Interpreter {
         }
 
         // If not, return action without output as it is a halt.
-        println!("Halt: {:?}", self.instruction_result);
         InterpreterAction::Return {
             result: InterpreterResult {
                 result: self.instruction_result,
